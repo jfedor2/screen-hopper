@@ -6,16 +6,19 @@ import struct
 import json
 
 VENDOR_ID = 0xCAFE
-PRODUCT_ID = 0xBAF2
+PRODUCT_ID = 0xBAF3
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 CONFIG_SIZE = 32
 REPORT_ID_CONFIG = 100
 
 GET_CONFIG = 3
 GET_MAPPING = 6
+GET_SCREEN = 13
 
 UNMAPPED_PASSTHROUGH_FLAG = 0x01
+
+NSCREENS = 2
 
 
 def check_crc(buf, crc_):
@@ -43,9 +46,11 @@ data = device.get_feature_report(REPORT_ID_CONFIG, CONFIG_SIZE + 1)
     our_usage_count,
     their_usage_count,
     interval_override,
+    constraint_mode,
+    offscreen_sensitivity,
     *_,
     crc,
-) = struct.unpack("<BBBLLLLB9BL", data)
+) = struct.unpack("<BBBLLLLBBL4BL", data)
 check_crc(data, crc)
 
 config = {
@@ -53,6 +58,9 @@ config = {
     "unmapped_passthrough": (flags & UNMAPPED_PASSTHROUGH_FLAG) != 0,
     "partial_scroll_timeout": partial_scroll_timeout,
     "interval_override": interval_override,
+    "constraint_mode": constraint_mode,
+    "offscreen_sensitivity": offscreen_sensitivity,
+    "screens": [],
     "mappings": [],
 }
 
@@ -82,5 +90,33 @@ for i in range(mapping_count):
             "sticky": (flags & 0x01) != 0,
         }
     )
+
+for i in range(NSCREENS):
+    data = struct.pack(
+        "<BBBL22B", REPORT_ID_CONFIG, CONFIG_VERSION, GET_SCREEN, i, *([0] * 22)
+    )
+    device.send_feature_report(add_crc(data))
+    data = device.get_feature_report(REPORT_ID_CONFIG, CONFIG_SIZE + 1)
+    (
+        report_id,
+        x,
+        y,
+        w,
+        h,
+        sensitivity,
+        *_,
+        crc,
+    ) = struct.unpack("<BLLLLL8BL", data)
+    check_crc(data, crc)
+    config["screens"].append(
+        {
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "sensitivity": sensitivity,
+        }
+    )
+
 
 print(json.dumps(config, indent=2))

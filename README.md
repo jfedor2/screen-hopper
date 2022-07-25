@@ -1,64 +1,54 @@
-# HID Remapper
+# Screen Hopper: a smart KVM switch
 
-This is a configurable USB dongle that allows you to remap inputs from mice, keyboards and other devices. It works completely in hardware and requires no software running on the computer during normal use.
+This is a USB input switcher that lets you use you mouse and keyboard with two computers by just dragging the mouse cursor from one screen to the other. It's like Logitech Flow, Mouse without Borders, Synergy or Apple Universal Control, but it works entirely in hardware. No special software is required on the computers. It works with Windows, Linux and Mac.
 
-It can do things like reassign buttons, change keyboard layouts, map mouse buttons to keyboard inputs, map keystrokes to mouse inputs, change mouse sensitivity (permanently or when a button is held), rotate mouse axes by arbitrary (non-90 degree) angles, drag-lock for mouse buttons, scroll by moving the mouse, and much more.
+Here's a [demo video](https://www.youtube.com/watch?v=z24jG9Nh5gk).
 
-It is configurable [through a web browser](https://www.jfedor.org/hid-remapper-config/) using WebHID (Chrome or Chrome-based browser required).
+This project is derived from [HID Remapper](https://github.com/jfedor2/hid-remapper) so it inherits all the nice features like input remapping, sensitivity adjustment, polling rate overclocking and more. Check out that project's documentation to see its full potential.
+
+Screen shapes and their relative position are configurable [through a web browser](https://www.jfedor.org/screen-hopper-config/) using WebHID (Chrome or Chrome-based browser required).
+
+In addition to dragging the cursor from one screen to the other, you can also map a key or button to switch between screens.
 
 Wireless receivers are supported and multiple devices can be connected at the same time using a USB hub.
 
-In addition to the remapping functionality, it can do polling rate overclocking up to 1000 Hz.
+![Screen hopper dual Pico version](images/screen-hopper.jpg)
 
-![HID Remapper](images/remapper1.jpg)
+## How is it possible?
+
+As you might know, normal mice only send relative inputs (X/Y deltas) to the computer, they don't know where the cursor is on the screen. Screen Hopper needs to know this to be able to switch between the screens. So what it does is it keeps an internal state of where the cursor is based on the inputs received from the mouse and it sends the absolute X/Y position to the connected computers. It is a standard feature of the USB HID protocol, but normally it's only used by devices like touchscreens and graphic tablets.
+
+There are some consequences to this mode of operation, for example the aspect ratios of the screens used need to be configured for Screen Hopper to be able to properly scale the horizontal and vertical inputs. Also it probably won't work very well with games that expect raw mouse inputs.
 
 ## How to make the device
 
-There are two hardware versions of the remapper: the single Pico version and the dual Pico version. They have the same functionality, but the dual Pico version has better device compatibility - most input devices work with either, but some will only work with the dual Pico version.
+There are two hardware versions of the Screen Hopper: the dual Pico version and the triple Pico version. They have the same functionality, but the triple Pico version has better device compatibility - some input devices work with either, but some will only work with the triple Pico version.
 
 See [here](HARDWARE.md) for details on how to make both versions of the device.
 
 ## How to use the configuration tool
 
-A live version of the web configuration tool can be found [here](https://www.jfedor.org/hid-remapper-config/). It only works in Chrome and Chrome-based browsers. Unfortunately it doesn't seem to work on Chrome OS. On Linux you might need to give yourself permissions to the appropriate `/dev/hidraw*` device.
+A live version of the web configuration tool can be found [here](https://www.jfedor.org/screen-hopper-config/). It only works in Chrome and Chrome-based browsers. On Linux you might need to give yourself permissions to the appropriate `/dev/hidraw*` device. The configuration tool should be used on the computer connected to the Pico running `screenhopper.uf2` or `screenhopper_a.uf2`.
 
-The input remapping mechanism is based on a list of _mappings_. Every mapping has an input and an output. Inputs and outputs are things like mouse buttons, mouse axes, keyboard keys etc. For example if you want the right mouse button to act as the left mouse button, add a mapping with input set to "Right button" and output set to "Left button".
+Some of the configuration options are inherited from [HID Remapper](https://github.com/jfedor2/hid-remapper) so check that project for the meaning of those settings (the mapping functionality can do really awesome things!).
 
-By default all inputs that aren't explicitly mapped to anything are passed through unchanged. If you don't want that, you can uncheck the "Unmapped inputs passthrough" checkbox.
+Screen Hopper needs to know the screen shapes and their relative position to be able to move the cursor between the two computers. You configure that by entering the position (X, Y) and dimensions (width, height) of each screen. (A graphical preview would be nice here, but for now it's just numbers.) The dimensions use abstract units so their absolute values don't mean much, but you will find some combinations give you reasonable mouse sensitivity. You can adjust the sensitivity for each screen separately.
 
-There can be more than one mapping with the same input and the same output. It is useful when you want to map a mouse button to, say, Ctrl-C. You can achieve that by adding two mappings, both with that button as input, one with "Control" as output and one with "C" as output.
+The "Restrict cursor" setting determines what should happen when you drag the mouse cursor outside of the screens (to the area that's not visible). If you select the "to screens" option, it will not be possible to go outside the visible area. If you select the "to bounding box" option, the cursor will be restricted to the smallest rectangle that covers both screens (this only makes a difference if the touching edges of the two screens are not the same length). If you select "don't restrict", the cursor will not stop at any of the screen edges.
 
-Similarly to remapping buttons, you can also remap axes. For example if you want horizontal mouse movements to be mapped to vertical cursor movements on the computer, add a mapping with the input set to "Cursor X" and the output set to "Cursor Y".
+![Screens configuration](images/screens-config.png)
 
-If you want to change cursor speed (mouse sensitivity), you can use the _scaling_ part of the mapping. By default it is set to 1, but you could add mappings with the same axes for inputs and outputs and for example set scaling to 2 to make the cursor move twice as fast, or set it to -1 to invert the direction of the movement. (Usually it's best to first increase the CPI on the device if possible as that will give you better precision.)
+Depending on the screens configuration and the "Restrict cursor" setting, it might be possible for the cursor to be outside of the visible area. There's a separate setting for mouse sensitivity for that situation.
 
-You can have a mapping that has a button or a key as input and an axis as output. For example if you add a mapping with "Right arrow" as input and "Cursor X" as output, it will make the cursor move right when right arrow is held on the keyboard.
-
-Having an axis as input and a button as output currently doesn't make a lot of sense.
-
-The _sticky_ flag on a mapping can be used to implement drag-lock functionality. When the flag is enabled on a mapping, pressing (and releasing) the input button will cause the output button to be held until the input button is pressed again.
-
-The _layers_ mechanism might sound familiar if you ever used a custom ergo keyboard. It works as follows. A special mapping can be added with some button as input and "Layer X" as output. This means that when that button is pressed, layer X is active and therefore mappings from layer X are applied (every mapping has a layer assigned, 0 by default). If no layer is explicitly activated, layer 0 is active. More than one layer can be active at the same time. This mechanism has many useful applications, from completely separate keyboard layouts to things like "sniper button" on a mouse - increasing precision when a certain button is held.
-
-Layer activating mappings work on all layers, regardless of which layer they are defined on. They can be sticky.
-
-The configuration tool comes with a list of standard inputs like mouse buttons and axes, keyboard keys and media keys like play/pause, mute, etc. Some devices will use inputs from outside that list. Good news is they can still be mapped. To make the device-specific inputs appear on the list, just connect your device to the remapper, and the remapper to your computer, and click the "Open device" button before you define the mappings. The configuration tool will fetch the list of inputs declared by your device and they will show up at the bottom of the input list. Unfortunately they will only appear as hex codes and will not have human friendly names. Therefore it might require some trial and error to find the input you want (and some devices will have a lot of them!).
-
-The remapper supports high-resolution mouse scrolling on the output side, which should work on Windows and modern Linux desktops. To experience it, add a mapping with "Cursor Y" as input and "V scroll" as output (perhaps on a layer). The "Partial scroll timeout" setting is related to this and you can safely ignore it if you're not mapping anything to mouse scroll. It applies when high-resolution scrolling is _not_ in use and is the time after which a "half-tick" of the scroll is forgotten.
-
-If you set the "Polling rate override" to anything else than "don't override", it will use the selected polling rate instead of the polling rate requested by the connected device. Keep in mind this doesn't work for all devices.
-
-If you're getting an "Incompatible version" error, try upgrading to the newest firmware.
-
-If this description wasn't particularly clear for you, perhaps looking at some of the examples that come with the configuration tool will help.
+If you configure the screens so that they don't touch each other (there's a gap) and select the "restrict to screens" option then it will not be possible to drag the cursor from one screen to the other. You can still switch between the screens by mapping some key or button to "Switch screen".
 
 If you can't use the browser-based configuration tool, there's also a [command-line tool](config-tool) that takes JSON in the same format as the web tool on standard input. I only tested it on Linux, but in theory it should also run on Windows and Mac.
 
 ## How to compile the firmware
 
 ```
-git clone https://github.com/jfedor2/hid-remapper.git
-cd hid-remapper
+git clone https://github.com/jfedor2/screen-hopper.git
+cd screen-hopper
 git submodule update --init
 cd firmware
 mkdir build
@@ -66,14 +56,3 @@ cd build
 cmake ..
 make
 ```
-
-## Future goals
-
-* Upstream necessary modifications to the Pico-PIO-USB library.
-* Unmapped input passthrough on layers other than 0.
-* Runtime-configurable output report descriptor.
-* Non-binary absolute usage support (d-pads and joysticks).
-* Interactive remapping.
-* Explore alternative hardware platforms.
-* Test with more devices.
-* Bluetooth version.

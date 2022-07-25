@@ -146,6 +146,7 @@ const usages = {
     "0xfff10001": { 'name': 'Layer 1', 'class': 'other' },
     "0xfff10002": { 'name': 'Layer 2', 'class': 'other' },
     "0xfff10003": { 'name': 'Layer 3', 'class': 'other' },
+    "0xfff20001": { 'name': 'Switch screen', 'class': 'other' },
 };
 
 export default usages;

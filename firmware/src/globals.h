@@ -30,4 +30,8 @@ extern std::vector<mapping_config_t> config_mappings;
 
 extern uint8_t resolution_multiplier;
 
+extern std::unordered_map<int8_t, screen_def_t> screens;
+
+extern ConstraintMode constraint_mode;
+
 #endif

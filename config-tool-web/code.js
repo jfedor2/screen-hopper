@@ -6,11 +6,12 @@ const REPORT_ID_CONFIG = 100;
 const UNMAPPED_PASSTHROUGH_FLAG = 0x01;
 const STICKY_FLAG = 0x01;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 3;
+const CONFIG_VERSION = 4;
 const VENDOR_ID = 0xCAFE;
-const PRODUCT_ID = 0xBAF2;
+const PRODUCT_ID = 0xBAF3;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
 const DEFAULT_SCALING = 1000;
+const DEFAULT_SENSITIVITY = 1000;
 
 const SET_CONFIG = 2;
 const GET_CONFIG = 3;
@@ -22,6 +23,8 @@ const GET_OUR_USAGES = 8
 const GET_THEIR_USAGES = 9
 const SUSPEND = 10;
 const RESUME = 11;
+const SET_SCREEN = 12;
+const GET_SCREEN = 13;
 
 const UINT8 = Symbol('uint8');
 const UINT32 = Symbol('uint32');
@@ -35,7 +38,25 @@ let config = {
     'unmapped_passthrough': true,
     'partial_scroll_timeout': DEFAULT_PARTIAL_SCROLL_TIMEOUT,
     'interval_override': 0,
-    mappings: [{
+    'constraint_mode': 2,
+    'offscreen_sensitivity': 4000,
+    'screens': [
+        {
+            'x': 0,
+            'y': 0,
+            'w': 16000000,
+            'h': 9000000,
+            'sensitivity': 4000
+        },
+        {
+            'x': 16000000,
+            'y': 0,
+            'w': 16000000,
+            'h': 9000000,
+            'sensitivity': 4000
+        }
+    ],
+    'mappings': [{
         'source_usage': '0x00000000',
         'target_usage': '0x00000000',
         'layer': 0,
@@ -61,6 +82,14 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("partial_scroll_timeout_input").addEventListener("change", partial_scroll_timeout_onchange);
     document.getElementById("unmapped_passthrough_checkbox").addEventListener("change", unmapped_passthrough_onchange);
     document.getElementById("interval_override_dropdown").addEventListener("change", interval_override_onchange);
+    document.getElementById("constraint_mode_dropdown").addEventListener("change", constraint_mode_onchange);
+    document.getElementById("offscreen_sensitivity_input").addEventListener("change", offscreen_sensitivity_onchange);
+
+    for (let i = 0; i < 2; i++) {
+        for (const param of ['x', 'y', 'w', 'h', 'sensitivity']) {
+            document.getElementById("screen" + i + "_" + param + "_input").addEventListener("change", screens_onchange);
+        }
+    }
 
     navigator.hid.addEventListener('disconnect', hid_on_disconnect);
 
@@ -102,15 +131,28 @@ async function load_from_device() {
 
     try {
         await send_feature_command(GET_CONFIG);
-        const [config_version, flags, partial_scroll_timeout, mapping_count, our_usage_count, their_usage_count, interval_override] =
-            await read_config_feature([UINT8, UINT8, UINT32, UINT32, UINT32, UINT32, UINT8]);
+        const [config_version, flags, partial_scroll_timeout, mapping_count, our_usage_count, their_usage_count, interval_override, constraint_mode, offscreen_sensitivity] =
+            await read_config_feature([UINT8, UINT8, UINT32, UINT32, UINT32, UINT32, UINT8, UINT8, UINT32]);
         check_version(config_version);
 
         config['version'] = config_version;
         config['unmapped_passthrough'] = (flags & UNMAPPED_PASSTHROUGH_FLAG) != 0;
         config['partial_scroll_timeout'] = partial_scroll_timeout;
         config['interval_override'] = interval_override;
+        config['constraint_mode'] = constraint_mode;
+        config['offscreen_sensitivity'] = offscreen_sensitivity;
         config['mappings'] = [];
+
+        for (let i = 0; i < 2; i++) {
+            await send_feature_command(GET_SCREEN, [[UINT32, i]]);
+            const [x, y, w, h, sensitivity] =
+                await read_config_feature([UINT32, UINT32, UINT32, UINT32, UINT32]);
+            config['screens'][i]['x'] = x;
+            config['screens'][i]['y'] = y;
+            config['screens'][i]['w'] = w;
+            config['screens'][i]['h'] = h;
+            config['screens'][i]['sensitivity'] = sensitivity;
+        }
 
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
@@ -143,7 +185,21 @@ async function save_to_device() {
             [UINT8, config['unmapped_passthrough'] ? UNMAPPED_PASSTHROUGH_FLAG : 0],
             [UINT32, config['partial_scroll_timeout']],
             [UINT8, config['interval_override']],
+            [UINT8, config['constraint_mode']],
+            [UINT32, config['offscreen_sensitivity']],
         ]);
+
+        for (let i = 0; i < 2; i++) {
+            await send_feature_command(SET_SCREEN, [
+                [UINT8, i],
+                [UINT32, config['screens'][i]['x']],
+                [UINT32, config['screens'][i]['y']],
+                [UINT32, config['screens'][i]['w']],
+                [UINT32, config['screens'][i]['h']],
+                [UINT32, config['screens'][i]['sensitivity']],
+            ]);
+        }
+
         await send_feature_command(CLEAR_MAPPING);
 
         for (const mapping of config['mappings']) {
@@ -209,6 +265,15 @@ function set_config_ui_state() {
     document.getElementById('partial_scroll_timeout_input').value = Math.round(config['partial_scroll_timeout'] / 1000);
     document.getElementById('unmapped_passthrough_checkbox').checked = config['unmapped_passthrough'];
     document.getElementById('interval_override_dropdown').value = config['interval_override'];
+    document.getElementById('constraint_mode_dropdown').value = config['constraint_mode'];
+    document.getElementById('offscreen_sensitivity_input').value = config['offscreen_sensitivity'] / 1000;
+
+    for (let i = 0; i < 2; i++) {
+        for (const param of ['x', 'y', 'w', 'h']) {
+            document.getElementById('screen' + i + '_' + param + '_input').value = config['screens'][i][param];
+        }
+        document.getElementById('screen' + i + '_sensitivity_input').value = config['screens'][i]['sensitivity'] / 1000;
+    }
 }
 
 function set_mappings_ui_state() {
@@ -468,6 +533,36 @@ function unmapped_passthrough_onchange() {
 
 function interval_override_onchange() {
     config['interval_override'] = parseInt(document.getElementById("interval_override_dropdown").value, 10);
+}
+
+function constraint_mode_onchange() {
+    config['constraint_mode'] = parseInt(document.getElementById("constraint_mode_dropdown").value, 10);
+}
+
+function offscreen_sensitivity_onchange() {
+    let value = document.getElementById('offscreen_sensitivity_input').value;
+    if (value === '') {
+        value = DEFAULT_SENSITIVITY;
+    } else {
+        value = Math.round(value * 1000);
+    }
+    config['offscreen_sensitivity'] = value;
+}
+
+function screens_onchange() {
+    for (let i = 0; i < 2; i++) {
+        for (const param of ['x', 'y', 'w', 'h']) {
+            let value = document.getElementById('screen' + i + '_' + param + '_input').value;
+            config['screens'][i][param] = (value === '' ? 0 : parseInt(value, 10));
+        }
+        let value = document.getElementById('screen' + i + '_sensitivity_input').value;
+        if (value === '') {
+            value = DEFAULT_SENSITIVITY;
+        } else {
+            value = Math.round(value * 1000);
+        }
+        config['screens'][i]['sensitivity'] = value;
+    }
 }
 
 function load_example(n) {

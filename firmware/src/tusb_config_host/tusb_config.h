@@ -21,4 +21,7 @@
 #define CFG_TUH_HID_EPIN_BUFSIZE 64
 #define CFG_TUH_HID_EPOUT_BUFSIZE 64
 
+// we don't want tinyusb to initialize any of the UARTs for stdio
+#undef PICO_DEFAULT_UART
+
 #endif

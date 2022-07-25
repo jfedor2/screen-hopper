@@ -15,7 +15,7 @@
 #include "our_descriptor.h"
 #include "remapper.h"
 
-const uint8_t CONFIG_VERSION = 3;
+const uint8_t CONFIG_VERSION = 4;
 
 const uint32_t PRESUMED_FLASH_SIZE = 2097152;
 const uint32_t CONFIG_OFFSET_IN_FLASH = (PRESUMED_FLASH_SIZE - FLASH_SECTOR_SIZE);
@@ -40,11 +40,17 @@ void load_config() {
         unmapped_passthrough = (config->flags & CONFIG_FLAG_UNMAPPED_PASSTHROUGH) != 0;
         partial_scroll_timeout = config->partial_scroll_timeout;
         interval_override = config->interval_override;
+        constraint_mode = config->constraint_mode;
+        screens[-1].sensitivity = config->offscreen_sensitivity;
+        for (uint8_t i = 0; i < NSCREENS; i++) {
+            screens[i] = config->screens[i];
+        }
         mapping_config_t* buffer_mappings = (mapping_config_t*) (FLASH_CONFIG_IN_MEMORY + sizeof(persist_config_t));
         for (uint32_t i = 0; i < config->mapping_count; i++) {
             config_mappings.push_back(buffer_mappings[i]);
         }
     }
+    screens_updated();
     set_mapping_from_config();
 }
 
@@ -59,6 +65,8 @@ void fill_get_config(get_config_t* config) {
     config->our_usage_count = our_usages_rle.size();
     config->their_usage_count = their_usages_rle.size();
     config->interval_override = interval_override;
+    config->constraint_mode = constraint_mode;
+    config->offscreen_sensitivity = screens[-1].sensitivity;
 }
 
 void fill_persist_config(persist_config_t* config) {
@@ -70,6 +78,11 @@ void fill_persist_config(persist_config_t* config) {
     config->partial_scroll_timeout = partial_scroll_timeout;
     config->mapping_count = config_mappings.size();
     config->interval_override = interval_override;
+    config->constraint_mode = constraint_mode;
+    config->offscreen_sensitivity = screens[-1].sensitivity;
+    for (uint8_t i = 0; i < NSCREENS; i++) {
+        config->screens[i] = screens[i];
+    }
 }
 
 void persist_config() {
@@ -131,6 +144,12 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
                 }
                 break;
             }
+            case ConfigCommand::GET_SCREEN: {
+                screen_def_t* returned_screen = (screen_def_t*) config_buffer;
+                if (requested_index < NSCREENS) {
+                    *returned_screen = screens[requested_index];
+                }
+            }
             default:
                 break;
         }
@@ -162,6 +181,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     if (prev_interval_override != interval_override) {
                         interval_override_updated();
                     }
+                    constraint_mode = config->constraint_mode;
+                    screens[-1].sensitivity = config->offscreen_sensitivity;
                     set_mapping_from_config();
                     break;
                 }
@@ -177,7 +198,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 case ConfigCommand::GET_MAPPING:
                 case ConfigCommand::GET_OUR_USAGES:
-                case ConfigCommand::GET_THEIR_USAGES: {
+                case ConfigCommand::GET_THEIR_USAGES:
+                case ConfigCommand::GET_SCREEN: {
                     get_indexed_t* get_indexed = (get_indexed_t*) ((set_feature_t*) buffer)->data;
                     requested_index = get_indexed->requested_index;
                     break;
@@ -192,6 +214,12 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     suspended = false;
                     // XXX clear input_state, sticky_state, accumulated?
                     break;
+                case ConfigCommand::SET_SCREEN: {
+                    set_screen_t* set_screen = (set_screen_t*) ((set_feature_t*) buffer)->data;
+                    screens[set_screen->index] = set_screen->screen;
+                    screens_updated();
+                    break;
+                }
                 default:
                     break;
             }

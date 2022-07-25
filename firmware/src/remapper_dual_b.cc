@@ -35,7 +35,6 @@ void request_b_init() {
 int main() {
     serial_init();
     board_init();
-    stdio_init_all();
 
     while (!initialized) {
         request_b_init();

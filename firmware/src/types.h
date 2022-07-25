@@ -16,6 +16,8 @@ enum class ConfigCommand : int8_t {
     GET_THEIR_USAGES = 9,
     SUSPEND = 10,
     RESUME = 11,
+    SET_SCREEN = 12,
+    GET_SCREEN = 13,
 };
 
 struct usage_def_t {
@@ -61,12 +63,31 @@ struct __attribute__((packed)) mapping_config_t {
     uint8_t flags;
 };
 
+enum class ConstraintMode : int8_t {
+    NO_CONSTRAINT = 0,
+    BOUNDING_BOX = 1,
+    VISIBLE = 2,
+};
+
+struct __attribute__((packed)) screen_def_t {
+    uint32_t x;
+    uint32_t y;
+    uint32_t w;
+    uint32_t h;
+    uint32_t sensitivity;
+};
+
+#define NSCREENS 2
+
 struct __attribute__((packed)) persist_config_t {
     uint8_t version;
     uint8_t flags;
     uint32_t partial_scroll_timeout;
     uint32_t mapping_count;
     uint8_t interval_override;
+    ConstraintMode constraint_mode;
+    uint32_t offscreen_sensitivity;
+    screen_def_t screens[NSCREENS];
 };
 
 struct __attribute__((packed)) get_config_t {
@@ -77,12 +98,16 @@ struct __attribute__((packed)) get_config_t {
     uint32_t our_usage_count;
     uint32_t their_usage_count;
     uint8_t interval_override;
+    ConstraintMode constraint_mode;
+    uint32_t offscreen_sensitivity;
 };
 
 struct __attribute__((packed)) set_config_t {
     uint8_t flags;
     uint32_t partial_scroll_timeout;
     uint8_t interval_override;
+    ConstraintMode constraint_mode;
+    uint32_t offscreen_sensitivity;
 };
 
 struct __attribute__((packed)) get_indexed_t {
@@ -97,6 +122,11 @@ struct __attribute__((packed)) crc32_t {
 
 struct __attribute__((packed)) usages_list_t {
     usage_rle_t usages[NUSAGES_IN_PACKET];
+};
+
+struct __attribute__((packed)) set_screen_t {
+    uint8_t index;
+    screen_def_t screen;
 };
 
 #endif

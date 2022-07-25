@@ -8,5 +8,6 @@ void extra_init();
 bool read_report();
 
 void interval_override_updated();
+void screens_updated();
 
 #endif

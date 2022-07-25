@@ -1,5 +1,4 @@
 #include "hardware/gpio.h"
-#include "hardware/uart.h"
 
 #include "pico/stdio.h"
 #include "stdio.h"
@@ -7,12 +6,11 @@
 #include "crc.h"
 #include "serial.h"
 
-#define SERIAL_UART uart1
 #define SERIAL_BAUDRATE 4000000
-#define SERIAL_TX_PIN 20
-#define SERIAL_RX_PIN 21
-#define SERIAL_CTS_PIN 26
-#define SERIAL_RTS_PIN 27
+#define SERIAL_TX_PIN 0
+#define SERIAL_RX_PIN 1
+#define SERIAL_CTS_PIN 2
+#define SERIAL_RTS_PIN 3
 
 void serial_init() {
     uart_init(SERIAL_UART, SERIAL_BAUDRATE);
@@ -29,15 +27,15 @@ void serial_init() {
 #define ESC_END 0334 /* ESC ESC_END means END data byte */
 #define ESC_ESC 0335 /* ESC ESC_ESC means ESC data byte */
 
-bool serial_read(msg_recv_cb_t callback) {
+bool serial_read(msg_recv_cb_t callback, uart_inst_t* uart) {
     static uint8_t buffer[SERIAL_MAX_PAYLOAD_SIZE + 32];
     static uint16_t bytes_read = 0;
     static bool escaped = false;
 
-    while (uart_is_readable(SERIAL_UART)) {
+    while (uart_is_readable(uart)) {
         bytes_read %= sizeof(buffer);
 
-        char c = uart_getc(SERIAL_UART);
+        char c = uart_getc(uart);
 
         if (escaped) {
             switch (c) {
@@ -85,35 +83,35 @@ bool serial_read(msg_recv_cb_t callback) {
     return false;
 }
 
-void send_escaped_byte(uint8_t b) {
+void send_escaped_byte(uint8_t b, uart_inst_t* uart) {
     switch (b) {
         case END:
-            uart_putc_raw(SERIAL_UART, ESC);
-            uart_putc_raw(SERIAL_UART, ESC_END);
+            uart_putc_raw(uart, ESC);
+            uart_putc_raw(uart, ESC_END);
             break;
 
         case ESC:
-            uart_putc_raw(SERIAL_UART, ESC);
-            uart_putc_raw(SERIAL_UART, ESC_ESC);
+            uart_putc_raw(uart, ESC);
+            uart_putc_raw(uart, ESC_ESC);
             break;
 
         default:
-            uart_putc_raw(SERIAL_UART, b);
+            uart_putc_raw(uart, b);
     }
 }
 
-void serial_write(const uint8_t* data, uint16_t len) {
+void serial_write(const uint8_t* data, uint16_t len, uart_inst_t* uart) {
     uint32_t crc = crc32(data, len);
 
-    uart_putc_raw(SERIAL_UART, END);
+    uart_putc_raw(uart, END);
 
     for (int i = 0; i < len; i++) {
-        send_escaped_byte(data[i]);
+        send_escaped_byte(data[i], uart);
     }
 
     for (int i = 0; i < 4; i++) {
-        send_escaped_byte((crc >> (i * 8)) & 0xFF);
+        send_escaped_byte((crc >> (i * 8)) & 0xFF, uart);
     }
 
-    uart_putc_raw(SERIAL_UART, END);
+    uart_putc_raw(uart, END);
 }

@@ -6,6 +6,8 @@
 #include <bsp/board.h>
 #include <tusb.h>
 
+#include "hardware/gpio.h"
+#include "hardware/uart.h"
 #include "pico/stdio.h"
 
 #include "config.h"
@@ -14,6 +16,10 @@
 #include "globals.h"
 #include "our_descriptor.h"
 #include "remapper.h"
+#include "serial.h"
+
+#define FORWARDER_UART uart1
+#define FORWARDER_TX_PIN 20
 
 const uint8_t MAPPING_FLAG_STICKY = 0x01;
 
@@ -21,6 +27,9 @@ const uint8_t V_RESOLUTION_BITMASK = (1 << 0);
 const uint8_t H_RESOLUTION_BITMASK = (1 << 2);
 const uint32_t V_SCROLL_USAGE = 0x00010038;
 const uint32_t H_SCROLL_USAGE = 0x000C0238;
+const uint32_t MOUSE_X_USAGE = 0x00010030;
+const uint32_t MOUSE_Y_USAGE = 0x00010031;
+const uint32_t SWITCH_SCREEN_USAGE = 0xFFF20001;
 
 const uint8_t NLAYERS = 4;
 const uint32_t LAYERS_USAGE_PAGE = 0xFFF10000;
@@ -37,6 +46,7 @@ std::unordered_map<uint32_t, usage_def_t> our_usages_flat;
 
 std::vector<uint32_t> layer_triggering_stickies;
 std::vector<uint64_t> sticky_usages;  // non-layer triggering, layer << 32 | usage
+std::vector<uint64_t> screen_switching_usages;
 
 // report_id -> ...
 uint8_t* reports[MAX_INPUT_REPORT_ID + 1];
@@ -46,7 +56,7 @@ uint8_t* report_masks_absolute[MAX_INPUT_REPORT_ID + 1];
 uint16_t report_sizes[MAX_INPUT_REPORT_ID + 1];
 
 #define OR_BUFSIZE 8
-uint8_t outgoing_reports[OR_BUFSIZE][CFG_TUD_HID_EP_BUFSIZE + 1];
+uint8_t outgoing_reports[OR_BUFSIZE][CFG_TUD_HID_EP_BUFSIZE + 2];
 uint8_t or_head = 0;
 uint8_t or_tail = 0;
 uint8_t or_items = 0;
@@ -75,6 +85,16 @@ bool led_state;
 uint64_t next_print = 0;
 uint32_t reports_received;
 uint32_t reports_sent;
+
+int64_t cursor_x = 0;
+int64_t cursor_y = 0;
+
+int8_t active_screen = 0;
+
+int64_t bounds_min_x;
+int64_t bounds_max_x;
+int64_t bounds_min_y;
+int64_t bounds_max_y;
 
 int32_t handle_scroll(uint32_t source_usage, uint32_t target_usage, int32_t movement) {
     int32_t ret = 0;
@@ -146,6 +166,7 @@ bool needs_to_be_sent(uint8_t report_id) {
 void set_mapping_from_config() {
     std::unordered_set<uint32_t> layer_triggering_sticky_set;
     std::unordered_set<uint64_t> sticky_usage_set;
+    std::unordered_set<uint64_t> screen_switching_usages_set;
     std::unordered_set<uint32_t> mapped;
 
     reverse_mapping.clear();
@@ -167,10 +188,14 @@ void set_mapping_from_config() {
                 sticky_usage_set.insert(((uint64_t) mapping.layer << 32) | mapping.source_usage);
             }
         }
+        if (mapping.target_usage == SWITCH_SCREEN_USAGE) {
+            screen_switching_usages_set.insert(((uint64_t) mapping.layer << 32) | mapping.source_usage);
+        }
     }
 
     layer_triggering_stickies.assign(layer_triggering_sticky_set.begin(), layer_triggering_sticky_set.end());
     sticky_usages.assign(sticky_usage_set.begin(), sticky_usage_set.end());
+    screen_switching_usages.assign(screen_switching_usages_set.begin(), screen_switching_usages_set.end());
 
     if (unmapped_passthrough) {
         for (auto const& [usage, usage_def] : our_usages_flat) {
@@ -179,6 +204,23 @@ void set_mapping_from_config() {
             }
         }
     }
+}
+
+void screens_updated() {
+    bounds_min_x = screens[0].x;
+    bounds_max_x = screens[0].x + screens[0].w;
+    bounds_min_y = screens[0].y;
+    bounds_max_y = screens[0].y + screens[0].h;
+    for (uint8_t i = 1; i < NSCREENS; i++) {
+        bounds_min_x = std::min(bounds_min_x, (int64_t) screens[i].x);
+        bounds_max_x = std::max(bounds_max_x, (int64_t) screens[i].x + screens[i].w);
+        bounds_min_y = std::min(bounds_min_y, (int64_t) screens[i].y);
+        bounds_max_y = std::max(bounds_max_y, (int64_t) screens[i].y + screens[i].h);
+    }
+
+    cursor_x = screens[0].x + screens[0].w / 2;
+    cursor_y = screens[0].y + screens[0].h / 2;
+    active_screen = 0;
 }
 
 bool differ_on_absolute(const uint8_t* report1, const uint8_t* report2, uint8_t report_id) {
@@ -214,6 +256,27 @@ void aggregate_relative(uint8_t* prev_report, const uint8_t* report, uint8_t rep
             }
         }
     }
+}
+
+bool within_bounds(int64_t x, int64_t y, int8_t& active_screen) {
+    active_screen = -1;
+    for (uint8_t i = 0; i < NSCREENS; i++) {
+        if (screens[i].x <= x &&
+            x < screens[i].x + screens[i].w &&
+            screens[i].y <= y &&
+            y < screens[i].y + screens[i].h) {
+            active_screen = i;
+            break;
+        }
+    }
+
+    return ((constraint_mode == ConstraintMode::VISIBLE && active_screen != -1) ||
+            (constraint_mode == ConstraintMode::BOUNDING_BOX &&
+                x >= bounds_min_x &&
+                x < bounds_max_x &&
+                y >= bounds_min_y &&
+                y < bounds_max_y) ||
+            (constraint_mode == ConstraintMode::NO_CONSTRAINT));
 }
 
 void process_mapping(bool auto_repeat) {
@@ -254,13 +317,26 @@ void process_mapping(bool auto_repeat) {
         prev_input_state[usage] = input_state[usage];
     }
 
+    for (auto const& layer_usage : screen_switching_usages) {
+        uint32_t usage = layer_usage & 0xFFFFFFFF;
+        uint32_t layer = layer_usage >> 32;
+        if (layer_state[layer]) {
+            if ((prev_input_state[usage] == 0) && (input_state[usage] != 0)) {
+                active_screen = (active_screen + 1) % NSCREENS;
+                cursor_x = screens[active_screen].x + screens[active_screen].w / 2;
+                cursor_y = screens[active_screen].y + screens[active_screen].h / 2;
+            }
+        }
+        prev_input_state[usage] = input_state[usage];
+    }
+
     for (auto const& [target, sources] : reverse_mapping) {
         auto search = our_usages_flat.find(target);
         if (search == our_usages_flat.end()) {
             continue;
         }
         const usage_def_t& our_usage = search->second;
-        if (our_usage.is_relative) {
+        if (our_usage.is_relative || target == MOUSE_X_USAGE || target == MOUSE_Y_USAGE) {
             for (auto const& map_source : sources) {
                 bool source_is_relative = relative_usage_set.count(map_source.usage);
                 if (auto_repeat || source_is_relative) {
@@ -308,6 +384,40 @@ void process_mapping(bool auto_repeat) {
         input_state[usage] = 0;
     }
 
+    int64_t dx = (int64_t) accumulated[MOUSE_X_USAGE] * screens[active_screen].sensitivity / 1000;
+    int64_t new_cursor_x = cursor_x + dx;
+    int64_t dy = (int64_t) accumulated[MOUSE_Y_USAGE] * screens[active_screen].sensitivity / 1000;
+    int64_t new_cursor_y = cursor_y + dy;
+    accumulated[MOUSE_X_USAGE] -= dx;
+    accumulated[MOUSE_Y_USAGE] -= dy;
+
+    int8_t new_active_screen;
+    if (within_bounds(new_cursor_x, new_cursor_y, new_active_screen)) {
+        cursor_x = new_cursor_x;
+        cursor_y = new_cursor_y;
+        active_screen = new_active_screen;
+    } else if (within_bounds(cursor_x, new_cursor_y, new_active_screen)) {  // so that the cursor doesn't snag on screen edges
+        cursor_y = new_cursor_y;
+        active_screen = new_active_screen;
+    } else if (within_bounds(new_cursor_x, cursor_y, new_active_screen)) {
+        cursor_x = new_cursor_x;
+        active_screen = new_active_screen;
+    }
+
+    if (active_screen != -1) {
+        int64_t local_x = (cursor_x - screens[active_screen].x) * 32768 / screens[active_screen].w;
+        int64_t local_y = (cursor_y - screens[active_screen].y) * 32768 / screens[active_screen].h;
+
+        {
+            usage_def_t& our_usage = our_usages_flat[MOUSE_X_USAGE];
+            put_bits((uint8_t*) reports[our_usage.report_id], report_sizes[our_usage.report_id], our_usage.bitpos, our_usage.size, local_x);
+        }
+        {
+            usage_def_t& our_usage = our_usages_flat[MOUSE_Y_USAGE];
+            put_bits((uint8_t*) reports[our_usage.report_id], report_sizes[our_usage.report_id], our_usage.bitpos, our_usage.size, local_y);
+        }
+    }
+
     for (auto& [usage, accumulated_val] : accumulated) {
         if (accumulated_val == 0) {
             continue;
@@ -328,19 +438,21 @@ void process_mapping(bool auto_repeat) {
 
     for (uint i = 0; i < report_ids.size(); i++) {  // XXX what order should we go in? maybe keyboard first so that mappings to ctrl-left click work as expected?
         uint8_t report_id = report_ids[i];
-        if (needs_to_be_sent(report_id)) {
+        if ((active_screen != -1) && needs_to_be_sent(report_id)) {
             if (or_items == OR_BUFSIZE) {
                 printf("overflow!\n");
                 break;
             }
             uint8_t prev = (or_tail + OR_BUFSIZE - 1) % OR_BUFSIZE;
             if ((or_items > 0) &&
-                (outgoing_reports[prev][0] == report_id) &&
-                !differ_on_absolute(outgoing_reports[prev] + 1, reports[report_id], report_id)) {
-                aggregate_relative(outgoing_reports[prev] + 1, reports[report_id], report_id);
+                (outgoing_reports[prev][0] == active_screen) &&
+                (outgoing_reports[prev][1] == report_id) &&
+                !differ_on_absolute(outgoing_reports[prev] + 2, reports[report_id], report_id)) {
+                aggregate_relative(outgoing_reports[prev] + 2, reports[report_id], report_id);
             } else {
-                outgoing_reports[or_tail][0] = report_id;
-                memcpy(outgoing_reports[or_tail] + 1, reports[report_id], report_sizes[report_id]);
+                outgoing_reports[or_tail][0] = active_screen;
+                outgoing_reports[or_tail][1] = report_id;
+                memcpy(outgoing_reports[or_tail] + 2, reports[report_id], report_sizes[report_id]);
                 memcpy(prev_reports[report_id], reports[report_id], report_sizes[report_id]);
                 or_tail = (or_tail + 1) % OR_BUFSIZE;
                 or_items++;
@@ -355,9 +467,14 @@ void send_report() {
         return;
     }
 
-    uint8_t report_id = outgoing_reports[or_head][0];
+    uint8_t target_screen = outgoing_reports[or_head][0];
+    uint8_t report_id = outgoing_reports[or_head][1];
 
-    tud_hid_report(report_id, outgoing_reports[or_head] + 1, report_sizes[report_id]);
+    if (target_screen == 0) {
+        tud_hid_report(report_id, outgoing_reports[or_head] + 2, report_sizes[report_id]);
+    } else {
+        serial_write(outgoing_reports[or_head] + 1, report_sizes[report_id] + 1, FORWARDER_UART);
+    }
 
     or_head = (or_head + 1) % OR_BUFSIZE;
     or_items--;
@@ -514,14 +631,20 @@ void sof_handler(uint32_t frame_count) {
     tick_pending = true;
 }
 
+void forwarder_serial_init() {
+    uart_init(FORWARDER_UART, FORWARDER_BAUDRATE);
+    uart_set_translate_crlf(FORWARDER_UART, false);
+    gpio_set_function(FORWARDER_TX_PIN, GPIO_FUNC_UART);
+}
+
 int main() {
     mutex_init(&their_usages_mutex);
     extra_init();
+    forwarder_serial_init();
     parse_our_descriptor();
     load_config();
     board_init();
     tusb_init();
-    stdio_init_all();
 
     tud_sof_isr_set(sof_handler);
 

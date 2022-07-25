@@ -1,41 +1,79 @@
 # How to make the device
 
-There are two hardware versions of the remapper: the single Pico version and the dual Pico version. They have the same functionality, but the dual Pico version has better device compatibility - most input devices work with either, but some will only work with the dual Pico version.
+There are two hardware versions of the Screen Hopper: the dual Pico version and the triple Pico version. They have the same functionality, but the triple Pico version has better device compatibility - some input devices work with either, but some will only work with the triple Pico version.
 
-## Single Pico version
+The reason for multiple Picos is that we need three USB interfaces and the RP2040 chip only has one. In the dual Pico version one of the interfaces is "bit-banged" (implemented in software) using the awesome [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB) library by [sekigon-gonnoc](https://github.com/sekigon-gonnoc).
 
-This version of the remapper is made using a Raspberry Pi Pico and a USB extension cable cut in half. It is possible thanks to this awesome [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB) library by [sekigon-gonnoc](https://github.com/sekigon-gonnoc). The Pico's built-in USB interface is used to connect to the host computer and the library is used to handle inputs from a USB mouse or keyboard.
+The Picos talk to one another over serial.
 
-Making the device is really simple, you just need to cut a USB extension cable in half and solder four wires to the right pins on the Pico: D+ to GPIO0 (pin 1), D- to GPIO1 (pin 2), VBUS to VBUS (pin 40) and GND to GND (pin 38). The wires are usually color coded (green, white, red, black, respectively). See the pictures below.
-
-The [enclosure](enclosure) folder has 3D-printable files for an optional case, seen in the photo below. It uses four M2x8 flat head screws.
-
-The provided [remapper.uf2](firmware/remapper.uf2) file can be used to flash the firmware onto the Pico the usual way (hold BOOTSEL button while connecting to the computer, then copy the UF2 file to the USB drive that shows up).
-
-![HID Remapper single Pico version](images/remapper1.jpg)
-![HID Remapper single Pico version inside](images/remapper2.jpg)
-![HID Remapper single Pico version soldering close-up](images/remapper3.jpg)
+To flash the Picos with the appropriate firmware (see below), hold the BOOTSEL button while connecting the Pico to the computer, then copy the right UF2 file to the "RPI-RP2" drive that shows up. You can find precompiled UF2 files in the [firmware](firmware) folder.
 
 ## Dual Pico version
 
-This version of the remapper uses two Raspberry Pi Picos that talk to each other over serial. One of Picos (B side) receives inputs from a USB mouse via an OTG cable and sends them over the serial link to the other Pico (A side). This Pico processes the configured mappings and sends the resulting inputs to the computer.
+This version is made using:
 
-You have to solder six wires between the two Picos, connecting the pins as shown below.
+* two Raspberry Pi Picos
+* 6N137 optocoupler
+* USB Type A female breakout board (or you could use a USB extender cable cut in half)
+* 470 ohm resistor (or similar)
+* 680 ohm resistor (or similar)
+* breadboard, some jumper wires
 
-| A side | B side |
-| -----: | -----: |
-| VBUS (pin 40) | VBUS (pin 40) |
-| GND (pin 38) | GND (pin 38) |
-| GPIO20 (pin 26) | GPIO21 (pin 27) |
-| GPIO21 (pin 27) | GPIO20 (pin 26) |
-| GPIO26 (pin 31) | GPIO27 (pin 32) |
-| GPIO27 (pin 32) | GPIO26 (pin 31) |
+![Dual Pico version breadboard diagram](images/breadboard-dual.png)
 
-![HID Remapper dual Pico version connection diagram](images/remapper-dual-diagram.png)
+The pin connections are as follows.
 
-There are two firmware files, one for each side. The side that will be connected to the computer has to be flashed with the [remapper\_dual\_a.uf2](firmware/remapper_dual_a.uf2) file, and the other side (that you will connect your input devices to using an OTG cable or adapter) has to be flashed with the [remapper\_dual\_b.uf2](firmware/remapper_dual_b.uf2) file. Flashing is done the usual way: hold BOOTSEL button while connecting to the computer, then copy the UF2 file to the USB drive that shows up. It is okay to do the flashing after the two Picos are connected as described above, but don't connect both sides to a host at the same time.
+| `screenhopper.uf2` Pico | USB port breakout |
+| --- | --- |
+| VBUS | VCC |
+| GND | GND |
+| GPIO0 | D+ |
+| GPIO1 | D- |
 
-The [enclosure](enclosure) folder has 3D-printable files for an optional case, seen in the photo below. It uses four M2x4 screws to attach the Pico boards and two M2x16 flat head screws to keep the two halves together.
+| `screenhopper.uf2` Pico | 6N137 optocoupler | |
+| --- | --- | --- |
+| 3V3 | A | through 470 ohm resistor |
+| GPIO20 | C | |
 
-![HID Remapper dual Pico version inside](images/remapper-dual2.jpg)
-![HID Remapper dual Pico version](images/remapper-dual1.jpg)
+| `forwarder.uf2` Pico | 6N137 optocoupler | |
+| --- | --- | --- |
+| VBUS | VCC | |
+| GND | GND | |
+| 3V3 | VO | through 680 ohm resistor |
+| GPIO9 | VO | |
+
+## Triple Pico version
+
+This is the version that's compatible with most devices. It's made using:
+
+* three Raspberry Pi Picos
+* 6N137 optocoupler
+* a USB OTG cable or adapter
+* 470 ohm resistor (or similar)
+* 680 ohm resistor (or similar)
+* breadboard, some jumper wires
+
+Connect your mouse/keyboard to the Pico running `screenhopper_b.uf2` via an OTG cable or adapter, and connect the other two Picos to the two computers.
+
+![Triple Pico version breadboard diagram](images/breadboard-triple.png)
+
+| `screenhopper_a.uf2` Pico | `screenhopper_b.uf2` Pico |
+| --- | --- |
+| VBUS | VBUS |
+| GND | GND |
+| GPIO0 | GPIO1 |
+| GPIO1 | GPIO0 |
+| GPIO2 | GPIO3 |
+| GPIO3 | GPIO2 |
+
+| `screenhopper_a.uf2` Pico | 6N137 optocoupler | |
+| --- | --- | --- |
+| 3V3 | A | through 470 ohm resistor |
+| GPIO20 | C | |
+
+| `forwarder.uf2` Pico | 6N137 optocoupler | |
+| --- | --- | --- |
+| VBUS | VCC | |
+| GND | GND | |
+| 3V3 | VO | through 680 ohm resistor |
+| GPIO9 | VO | |
